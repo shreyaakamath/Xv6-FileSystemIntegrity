@@ -1,0 +1,18 @@
+#include "types.h"
+#include "stat.h"
+#include "user.h"
+#include "fs.h"
+#include "fcntl.h"
+int
+main(int argc, char *argv[])
+{
+	int fd = open("foo1",O_CREATE|O_CHECKED|O_RDWR);
+	char *buf = "checking";
+	int res = write(fd,(void*)buf,sizeof(buf));
+	printf(1,"res = %d",res );
+	char *readdata;
+	int res2 = read(fd,(void*)readdata,sizeof(readdata));
+	printf(1," res = %d readdata  = %s",res2,readdata );
+
+  exit();
+}
