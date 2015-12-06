@@ -331,7 +331,15 @@ bmap(struct inode *ip, uint bn,uint checksum,int rwFlag)
 			addr=addr|(checksum<<24);
     	}
         ip->addrs[bn] =addr;
-        return addr;
+        if (rwFlag==0){
+        	cprintf("rwflag = %d storing ip->addr = %x,bn = %x addr = %x\n",rwFlag,ip->addrs[bn],bn,addr);
+        	return addr;
+        }
+        else{
+			addr = addr & 0x00ffffff;
+			cprintf("rwflag = %d storing ip->addr = %x,bn = %x addr = %x\n",rwFlag,ip->addrs[bn],bn,addr);
+			return addr;
+        }
     }
     if(rwFlag==1){
 		if(ip->type == T_CHECKED) {
@@ -340,8 +348,15 @@ bmap(struct inode *ip, uint bn,uint checksum,int rwFlag)
 			ip->addrs[bn] =addr;
 		}
     }
-
-    return addr;
+    if (rwFlag==0){
+    	cprintf("returning %x, ip->addrs[bn] = %x bn =%x\n",addr,ip->addrs[bn],bn);
+		return addr;
+    }
+	else{
+		addr = addr & 0x00ffffff;
+		cprintf("rwflag = %d storing ip->addr = %x,bn = %x addr = %x\n",rwFlag,ip->addrs[bn],bn,addr);
+		return addr;
+    }
   }
   bn -= NDIRECT;
 
@@ -369,7 +384,13 @@ bmap(struct inode *ip, uint bn,uint checksum,int rwFlag)
 		}
 	}
     brelse(bp);
-    return addr;
+    if (rwFlag==0)
+		return addr;
+	else{
+		addr = addr & 0x00ffffff;
+//		cprintf("Indirect rwflag = %d storing ip->addr = %x, addr = %x\n",rwFlag,a[bn],addr);
+		return addr;
+	}
   }
 
   panic("bmap: out of range");
@@ -433,26 +454,30 @@ stati(struct inode *ip, struct stat *st)
 	  uint *a;
 	  int j,i;
 	  uint xor=0;
+	  uint checksum=0;
 	  //calculate xor of checksums of all direct block
 	  for(i = 0; i < NDIRECT; i++){
 		  if(ip->addrs[i]){
 			  uint addr = ip->addrs[i];
-			  uint checksum = (addr&0xf000)>>24;
-			  if(i==0) {
-				  xor = checksum;continue;
-			  }
+			  checksum = (addr&0xff000000)>>24;
 			  xor = xor^checksum;
 		  }
 	  }
 	  //calculate xor of checksums fo all indirect blocks
-	  if(ip->addrs[NDIRECT]){
-		  bp = bread(ip->dev, ip->addrs[NDIRECT]);
-		  a = (uint*)bp->data;
-		  for(j = 0; j < NINDIRECT; j++){
-			  uint addr = a[j];
-			  uint checksum = (addr&0xf000)>>24;
-			  xor = xor^checksum;
-		  }
+	  uint addr = ip->addrs[NDIRECT];
+	  if(addr !=0){
+			  bp = bread(ip->dev, addr);
+			  a = (uint*)bp->data;
+			  for(j = 0; j < NINDIRECT; j++){
+				 uint addr = a[j];
+				 if(a[j]!=0){
+				  checksum = (addr&0xff000000)>>24;
+				  xor = xor^checksum;
+				 }
+				 else{
+					 break;
+				 }
+			  }
 	  }
 	  st->checksum = xor;
   }
@@ -476,37 +501,31 @@ readi(struct inode *ip, char *dst, uint off, uint n)
     return -1;
   if(off + n > ip->size)
     n = ip->size - off;
-
+  int  checksum=0;
+  uint xor=0;
   for(tot=0; tot<n; tot+=m, off+=m, dst+=m){
     uint addr = bmap(ip, off/BSIZE,0,0);
-    uint checksum = (addr & 0x0f000000)>>24;
-    cprintf("addr for ck calc = %x\n",addr);
-    //mask checksum before bread
+    cprintf("checksum = %x,addr = %x\n",checksum,addr);
+	checksum^= (addr & 0xff000000)>>24;
     addr = addr & 0x00ffffff;
+
     bp = bread(ip->dev, addr);
     m = min(n - tot, BSIZE - off%BSIZE);
 
-    int * src = (int *) (bp->data + off%BSIZE);
-    cprintf("src = %s\n",(char *)src);
-    int bit;
-    bit = *src;
-    // checksum is correct ... xor is wrong ...
-    int xor=(bit & 0x1);
-    	if(ip->type == T_CHECKED){
-    		int tmp=m;
-    		while(tmp-- > 0){
-    			bit = bit >> 1;
-    		    xor=xor ^ (bit & 0x1);
-    		}
-    		if(checksum != xor) {
-    			cprintf("returning checksum wrong ck = %x xor = %x m=%x\n",checksum,xor,m);
-    			return -1;
-    		}
-    	}
+    int * src = (int *) (bp->data+ off%BSIZE);
+//    cprintf("readi src = %s,m=%x\n",(char *)src,m);
 
+	if(ip->type == T_CHECKED){
+			xor ^= *src;
+	}
     memmove(dst, bp->data + off%BSIZE, m);
 
     brelse(bp);
+  }
+
+  if(ip->type == T_CHECKED && checksum != xor) {
+	cprintf("returning checksum wrong ck = %x xor = %x m=%x\n",checksum,xor,m);
+		return -1;
   }
   return n;
 }
@@ -529,29 +548,28 @@ writei(struct inode *ip, char *src, uint off, uint n)
     return -1;
   if(off + n > MAXFILE*BSIZE)
     n = MAXFILE*BSIZE - off;
+  uint xor=0;
+  cprintf("read checksum = %d, src = %d\n",xor,*src);
+
+
 
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
 	m = min(n - tot, BSIZE - off%BSIZE);
-
-	int xor=(int)*src & 0x1;
-	int bit;
 	if(ip->type == T_CHECKED){
-		int tmp=m;
-		bit = *src;
-		while(tmp-- > 0){
-			bit = bit >> 1;
-			xor=xor ^ (bit & 0x1);
-		}
-	}
+	  	  	  	xor ^= *src;
+	 }
+
 	//bmap returns address with checksum set , mask the checksum before calling bread
 	uint addr = bmap(ip, off/BSIZE,xor,1);
-	cprintf("addr = %x src = %s m=%x\n",addr,src,m);
-	addr = addr & 0x00ffffff;
+	cprintf("writei src = %s m=%x xor = %x\n",src,addr,xor);
 	bp = bread(ip->dev, addr);
     memmove(bp->data + off%BSIZE, src, m);
     bwrite(bp);
     brelse(bp);
   }
+//  if(ip->type == T_CHECKED){
+//  	ip->checksum =xor;
+//  }
   if(n > 0 && off > ip->size){
     ip->size = off;
     iupdate(ip);
